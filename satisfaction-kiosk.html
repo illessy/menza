@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Satisfaction Kiosk</title>
+<style>
+  :root{
+    --bg:#f5f1ea; --card:#ffffff; --text:#2b2620; --muted:#7a7166;
+    --good:#3a7d44; --ok:#d9a441; --bad:#b3392c;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){ --bg:#1c1a17; --card:#2a2620; --text:#f2ede4; --muted:#b0a89c; }
+  }
+  :root[data-theme="dark"]{ --bg:#1c1a17; --card:#2a2620; --text:#f2ede4; --muted:#b0a89c; }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    display:flex; align-items:center; justify-content:center; overflow:hidden;
+    padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  .wrap{width:100%;max-width:900px;padding:24px;text-align:center;}
+  h1{font-size:clamp(1.6rem,4vw,2.6rem);margin:0 0 8px;}
+  p.sub{color:var(--muted);font-size:clamp(1rem,2vw,1.25rem);margin:0 0 40px;}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;}
+  @media (max-width:640px){.grid{grid-template-columns:repeat(2,1fr);}}
+  button.rate{
+    background:var(--card); border:none; border-radius:20px; padding:32px 12px;
+    font-size:clamp(2.5rem,6vw,4rem); cursor:pointer;
+    box-shadow:0 4px 14px rgba(0,0,0,0.12); transition:transform .08s ease; color:var(--text);
+  }
+  button.rate:active{transform:scale(.93);}
+  button.rate:disabled{opacity:.5;cursor:not-allowed;}
+  button.rate .label{display:block;font-size:clamp(.85rem,1.6vw,1.05rem);margin-top:10px;color:var(--muted);font-weight:600;}
+  .thanks{font-size:clamp(2rem,5vw,3.5rem);font-weight:700;}
+  .thanks .icon{font-size:clamp(4rem,10vw,6rem);display:block;margin-bottom:12px;}
+  .hidden{display:none;}
+  footer{margin-top:32px;color:var(--muted);font-size:.8rem;}
+  /* honeypot: hidden from humans, visible to naive bots that fill every field */
+  .hp{position:absolute;left:-9999px;top:-9999px;opacity:0;height:0;width:0;overflow:hidden;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="askScreen">
+    <h1 id="titleText">How was your experience?</h1>
+    <p class="sub" id="subText">Tap a button to let us know</p>
+    <div class="grid" id="buttonGrid"></div>
+    <footer>Your response is anonymous.</footer>
+  </div>
+  <div id="thanksScreen" class="hidden thanks">
+    <span class="icon">✅</span>
+    Thanks for your feedback!
+  </div>
+  <!-- Honeypot field: real users never see or fill this. If it's filled, we silently drop the submit. -->
+  <input type="text" id="hp_field" class="hp" tabindex="-1" autocomplete="off">
+</div>
+
+<script>
+/* =========================================================================
+   CONFIGURE ME
+   ========================================================================= */
+const CONFIG = {
+  title: "How was your experience?",
+  subtitle: "Tap a button to let us know",
+
+  buttons: [
+    { label: "Poor",  emoji: "😞", value: "1", color: "var(--bad)" },
+    { label: "Fair",  emoji: "😐", value: "2", color: "var(--ok)"  },
+    { label: "Good",  emoji: "🙂", value: "3", color: "var(--good)" },
+    { label: "Great", emoji: "😃", value: "4", color: "var(--good)" }
+  ],
+
+  // --- Where to send data ---
+  // Choose ONE method below and fill in its details. Leave the other's `enabled: false`.
+
+  // METHOD A: Google Forms
+  // How to get these values: open your Google Form, click the three dots -> "Get pre-filled link",
+  // fill any answer, click "Get link", then look at the generated URL for entry.XXXXXXXXX -
+  // that's your field ID. The form action URL is the same as the form's edit/view URL but
+  // ending in /formResponse instead of /viewform.
+  googleForm: {
+    enabled: true,
+    actionUrl: "https://docs.google.com/forms/d/e/YOUR_FORM_ID/formResponse",
+    ratingFieldName: "entry.123456789"   // replace with your rating question's entry ID
+  },
+
+  // METHOD B: Google Sheet via Apps Script Web App
+  // Create a Sheet -> Extensions -> Apps Script -> paste a doPost() that appends a row ->
+  // Deploy -> Web App -> copy the /exec URL below.
+  appsScript: {
+    enabled: false,
+    webAppUrl: "https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec"
+  },
+
+  // --- Spam protection ---
+  minSecondsOnPageBeforeSubmit: 1.5,   // ignore submits faster than this (bots click instantly)
+  cooldownSecondsPerBrowser: 5          // ignore repeat submits from the same browser within this window
+};
+/* ========================================================================= */
+
+const pageLoadTime = Date.now();
+const askScreen = document.getElementById('askScreen');
+const thanksScreen = document.getElementById('thanksScreen');
+const grid = document.getElementById('buttonGrid');
+document.getElementById('titleText').textContent = CONFIG.title;
+document.getElementById('subText').textContent = CONFIG.subtitle;
+
+CONFIG.buttons.forEach(b => {
+  const btn = document.createElement('button');
+  btn.className = 'rate';
+  btn.style.borderTop = `6px solid ${b.color}`;
+  btn.innerHTML = `${b.emoji}<span class="label">${b.label}</span>`;
+  btn.addEventListener('click', () => handleSubmit(b));
+  grid.appendChild(btn);
+});
+
+function isSpamLikely() {
+  // 1. Honeypot filled -> bot
+  if (document.getElementById('hp_field').value.trim() !== '') return true;
+  // 2. Too fast -> bot
+  const secondsOnPage = (Date.now() - pageLoadTime) / 1000;
+  if (secondsOnPage < CONFIG.minSecondsOnPageBeforeSubmit) return true;
+  // 3. Cooldown per browser -> prevents accidental/rapid double taps or refresh-spam
+  const last = parseInt(localStorage.getItem('kiosk_last_submit') || '0', 10);
+  if (Date.now() - last < CONFIG.cooldownSecondsPerBrowser * 1000) return true;
+  return false;
+}
+
+function submitToGoogleForm(value) {
+  const iframe = document.createElement('iframe');
+  iframe.name = 'hidden_submit_frame';
+  iframe.style.display = 'none';
+  document.body.appendChild(iframe);
+
+  const form = document.createElement('form');
+  form.action = CONFIG.googleForm.actionUrl;
+  form.method = 'POST';
+  form.target = 'hidden_submit_frame';
+
+  const input = document.createElement('input');
+  input.type = 'hidden';
+  input.name = CONFIG.googleForm.ratingFieldName;
+  input.value = value;
+  form.appendChild(input);
+
+  document.body.appendChild(form);
+  form.submit();
+  setTimeout(() => { form.remove(); iframe.remove(); }, 3000);
+}
+
+function submitToAppsScript(value) {
+  fetch(CONFIG.appsScript.webAppUrl, {
+    method: 'POST',
+    mode: 'no-cors', // Apps Script web apps usually don't return CORS headers;
+                      // no-cors still delivers the POST, we just can't read the response
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rating: value, ts: new Date().toISOString() })
+  }).catch(() => {}); // no-cors responses are opaque; nothing meaningful to catch
+}
+
+function handleSubmit(buttonConfig) {
+  if (isSpamLikely()) {
+    // Silently show the thank-you screen anyway so a bot gets no feedback
+    // about being blocked, but no data is actually sent.
+    showThanks();
+    return;
+  }
+
+  if (CONFIG.googleForm.enabled) submitToGoogleForm(buttonConfig.value);
+  if (CONFIG.appsScript.enabled) submitToAppsScript(buttonConfig.value);
+
+  localStorage.setItem('kiosk_last_submit', String(Date.now()));
+  showThanks();
+}
+
+function showThanks() {
+  askScreen.classList.add('hidden');
+  thanksScreen.classList.remove('hidden');
+  setTimeout(() => {
+    thanksScreen.classList.add('hidden');
+    askScreen.classList.remove('hidden');
+  }, 2500);
+}
+</script>
+</body>
+</html>
