@@ -45,14 +45,14 @@
 <body>
 <div class="wrap">
   <div id="askScreen">
-    <h1 id="titleText">How was your experience?</h1>
-    <p class="sub" id="subText">Tap a button to let us know</p>
+    <h1 id="titleText">Milyen volt?</h1>
+    <p class="sub" id="subText">Egy gombnyomással válaszolj!</p>
     <div class="grid" id="buttonGrid"></div>
-    <footer>Your response is anonymous.</footer>
+    <footer>Anoním a válaszod.</footer>
   </div>
   <div id="thanksScreen" class="hidden thanks">
     <span class="icon">✅</span>
-    Thanks for your feedback!
+    Köszönjük a visszajelzést!
   </div>
   <!-- Honeypot field: real users never see or fill this. If it's filled, we silently drop the submit. -->
   <input type="text" id="hp_field" class="hp" tabindex="-1" autocomplete="off">
@@ -67,10 +67,10 @@ const CONFIG = {
   subtitle: "Tap a button to let us know",
 
   buttons: [
-    { label: "Poor",  emoji: "😞", value: "1", color: "var(--bad)" },
-    { label: "Fair",  emoji: "😐", value: "2", color: "var(--ok)"  },
-    { label: "Good",  emoji: "🙂", value: "3", color: "var(--good)" },
-    { label: "Great", emoji: "😃", value: "4", color: "var(--good)" }
+    { label: "Rossz",  emoji: "😞", value: "1", color: "var(--bad)" },
+    { label: "Elmegy",  emoji: "😐", value: "2", color: "var(--ok)"  },
+    { label: "Jó",  emoji: "🙂", value: "3", color: "var(--good)" },
+    { label: "Fenséges", emoji: "😃", value: "4", color: "var(--good)" }
   ],
 
   // --- Where to send data ---
