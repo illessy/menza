@@ -32,8 +32,8 @@
   :root[data-theme="dark"] h1{color:var(--text);}
   @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) h1{color:var(--text);} }
   p.sub{color:var(--muted);font-size:clamp(1rem,2vw,1.25rem);margin:0 0 40px;}
-  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;}
-  @media (max-width:640px){.grid{grid-template-columns:repeat(2,1fr);}}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
+  @media (max-width:640px){.grid{gap:12px;}}
   button.rate{
     background:var(--card); border:1px solid rgba(35,56,168,0.12); border-radius:20px; padding:32px 12px;
     font-size:clamp(2.5rem,6vw,4rem); cursor:pointer;
@@ -46,6 +46,25 @@
   :root[data-theme="dark"] .thanks{color:var(--text);}
   @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .thanks{color:var(--text);} }
   .thanks .icon{font-size:clamp(4rem,10vw,6rem);display:block;margin-bottom:12px;}
+  /* ---- Lunch mode (two panels: soup + main course) ---- */
+  .wrap.wide{max-width:1000px;}
+  .wrap.wide .logo{width:clamp(60px,9vw,90px);}
+  .wrap.wide p.sub{margin-bottom:20px;}
+  .lunch{display:grid;grid-template-columns:1fr 1fr;gap:24px;}
+  @media (max-width:640px){.lunch{grid-template-columns:1fr;gap:12px;} .wrap.wide{padding:12px;}}
+  .panel{position:relative;background:rgba(35,56,168,0.08);border:1px solid rgba(35,56,168,0.18);border-radius:24px;padding:16px 14px 18px;}
+  .panel h2{margin:0 0 12px;font-size:clamp(1.2rem,2.6vw,1.7rem);color:var(--royal-dark);}
+  :root[data-theme="dark"] .panel h2{color:var(--text);}
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .panel h2{color:var(--text);} }
+  .panel .grid{gap:12px;}
+  .panel button.rate{padding:18px 4px;font-size:clamp(2rem,4.5vw,3rem);}
+  .panel button.rate .label{font-size:clamp(.75rem,1.4vw,.95rem);}
+  .panel .done-msg{display:none;font-weight:700;color:var(--royal-dark);margin:-6px 0 10px;}
+  :root[data-theme="dark"] .panel .done-msg{color:var(--text);}
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .panel .done-msg{color:var(--text);} }
+  .panel.done .done-msg{display:block;}
+  .panel.done button.rate{opacity:.35;pointer-events:none;}
+  .panel.done button.rate.chosen{opacity:1;outline:3px solid var(--royal);}
   .hidden{display:none;}
   footer{margin-top:32px;color:var(--muted);font-size:.8rem;}
   /* honeypot: hidden from humans, visible to naive bots that fill every field */
@@ -59,6 +78,7 @@
     <h1 id="titleText">Milyen volt?</h1>
     <p class="sub" id="subText">Egy gombnyomással válaszolj!</p>
     <div class="grid" id="buttonGrid"></div>
+    <div class="lunch hidden" id="lunchGrid"></div>
     <footer>Anonim a válaszod.</footer>
   </div>
   <div id="thanksScreen" class="hidden thanks">
@@ -80,8 +100,7 @@ const CONFIG = {
   buttons: [
     { label: "Rossz",  emoji: "😞", value: "1", color: "var(--bad)" },
     { label: "Elmegy",  emoji: "😐", value: "2", color: "var(--ok)"  },
-    { label: "Jó",  emoji: "🙂", value: "3", color: "var(--good)" },
-    { label: "Fenséges", emoji: "😃", value: "4", color: "var(--royal)" }
+    { label: "Jó",  emoji: "🙂", value: "3", color: "var(--good)" }
   ],
 
   // --- Where to send data ---
@@ -96,6 +115,21 @@ const CONFIG = {
     enabled: true,
     actionUrl: "https://docs.google.com/forms/d/1IrI5DKTmzlDxeOOhFr82U3qESDKjcreccR560XmBYO4/formResponse", // nem kell az e
     ratingFieldName: "entry.1177244466"   // replace with your rating question's entry ID
+  },
+
+  // --- Lunch period: the kiosk splits into two ratings (soup + main course) ---
+  lunch: {
+    enabled: true,
+    timeZone: "Europe/Budapest",          // CET in winter, CEST in summer (switches automatically)
+    start: "12:30",
+    end: "14:30",                         // end is exclusive: 14:30 is already back to normal
+    idleResetSeconds: 15,                 // if only one half got rated, reset the screen after this
+    courses: [
+      // Both panels answer the SAME question (ratingFieldName). To tell them apart, the main course
+      // sends the value shifted up: soup = 1,2,3  /  main course = 4,5,6   (valueOffset = 3)
+      { id: "soup", title: "Leves",          emoji: "🍲", valueOffset: 0 },
+      { id: "main", title: "Második fogás",  emoji: "🍛", valueOffset: 3 }
+    ]
   },
 
   // METHOD B: Google Sheet via Apps Script Web App
@@ -119,56 +153,116 @@ const grid = document.getElementById('buttonGrid');
 document.getElementById('titleText').textContent = CONFIG.title;
 document.getElementById('subText').textContent = CONFIG.subtitle;
 
-CONFIG.buttons.forEach(b => {
-  const btn = document.createElement('button');
-  btn.className = 'rate';
-  btn.style.borderTop = `6px solid ${b.color}`;
-  btn.innerHTML = `${b.emoji}<span class="label">${b.label}</span>`;
-  btn.addEventListener('click', () => handleSubmit(b));
-  grid.appendChild(btn);
-});
+const wrapEl = document.querySelector('.wrap');
+const lunchGrid = document.getElementById('lunchGrid');
+let currentMode = null;
+let idleTimer = null;
+const lunchPicked = new Set();
 
-function isSpamLikely() {
+function buildButtons(container, onPick) {
+  CONFIG.buttons.forEach(b => {
+    const btn = document.createElement('button');
+    btn.className = 'rate';
+    btn.style.borderTop = `6px solid ${b.color}`;
+    btn.innerHTML = `${b.emoji}<span class="label">${b.label}</span>`;
+    btn.addEventListener('click', () => onPick(b, btn));
+    container.appendChild(btn);
+  });
+}
+
+// ---- Which mode are we in? ('lunch' or 'normal') ----
+// Test tip: add ?mode=lunch or ?mode=normal to the page address to force a mode.
+function minutesNow() {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: CONFIG.lunch.timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    }).formatToParts(new Date());
+    return parseInt(parts.find(p => p.type === 'hour').value, 10) * 60 +
+           parseInt(parts.find(p => p.type === 'minute').value, 10);
+  } catch (e) {
+    const d = new Date(); return d.getHours() * 60 + d.getMinutes();
+  }
+}
+function toMinutes(hhmm) { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; }
+function getMode() {
+  const forced = new URLSearchParams(location.search).get('mode');
+  if (forced === 'lunch' || forced === 'normal') return forced;
+  if (!CONFIG.lunch.enabled) return 'normal';
+  const now = minutesNow();
+  return (now >= toMinutes(CONFIG.lunch.start) && now < toMinutes(CONFIG.lunch.end)) ? 'lunch' : 'normal';
+}
+
+function renderAsk() {
+  clearTimeout(idleTimer);
+  lunchPicked.clear();
+  currentMode = getMode();
+  const lunch = currentMode === 'lunch';
+  wrapEl.classList.toggle('wide', lunch);
+  grid.classList.toggle('hidden', lunch);
+  lunchGrid.classList.toggle('hidden', !lunch);
+  grid.innerHTML = '';
+  lunchGrid.innerHTML = '';
+
+  if (!lunch) {
+    buildButtons(grid, b => handleSubmit(b));
+    return;
+  }
+  CONFIG.lunch.courses.forEach(course => {
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.innerHTML = `<h2>${course.emoji} ${course.title}</h2><div class="done-msg">✅ Köszönjük!</div>`;
+    const g = document.createElement('div');
+    g.className = 'grid';
+    buildButtons(g, (b, btn) => handleLunchPick(course, b, btn, panel));
+    panel.appendChild(g);
+    lunchGrid.appendChild(panel);
+  });
+}
+
+function isSpamLikely(cooldownKey = 'kiosk_last_submit') {
   // 1. Honeypot filled -> bot
   if (document.getElementById('hp_field').value.trim() !== '') return true;
   // 2. Too fast -> bot
   const secondsOnPage = (Date.now() - pageLoadTime) / 1000;
   if (secondsOnPage < CONFIG.minSecondsOnPageBeforeSubmit) return true;
   // 3. Cooldown per browser -> prevents accidental/rapid double taps or refresh-spam
-  const last = parseInt(localStorage.getItem('kiosk_last_submit') || '0', 10);
+  const last = parseInt(localStorage.getItem(cooldownKey) || '0', 10);
   if (Date.now() - last < CONFIG.cooldownSecondsPerBrowser * 1000) return true;
   return false;
 }
 
-function submitToGoogleForm(value) {
+let frameCounter = 0;
+function submitToGoogleForm(entries) {
   const iframe = document.createElement('iframe');
-  iframe.name = 'hidden_submit_frame';
+  iframe.name = 'hidden_submit_frame_' + (frameCounter++);
   iframe.style.display = 'none';
   document.body.appendChild(iframe);
 
   const form = document.createElement('form');
   form.action = CONFIG.googleForm.actionUrl;
   form.method = 'POST';
-  form.target = 'hidden_submit_frame';
+  form.target = iframe.name;
 
-  const input = document.createElement('input');
-  input.type = 'hidden';
-  input.name = CONFIG.googleForm.ratingFieldName;
-  input.value = value;
-  form.appendChild(input);
+  entries.forEach(e => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = e.name;
+    input.value = e.value;
+    form.appendChild(input);
+  });
 
   document.body.appendChild(form);
   form.submit();
   setTimeout(() => { form.remove(); iframe.remove(); }, 3000);
 }
 
-function submitToAppsScript(value) {
+function submitToAppsScript(value, courseValue) {
   fetch(CONFIG.appsScript.webAppUrl, {
     method: 'POST',
     mode: 'no-cors', // Apps Script web apps usually don't return CORS headers;
                       // no-cors still delivers the POST, we just can't read the response
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rating: value, ts: new Date().toISOString() })
+    body: JSON.stringify({ rating: value, course: courseValue || 'general', ts: new Date().toISOString() })
   }).catch(() => {}); // no-cors responses are opaque; nothing meaningful to catch
 }
 
@@ -180,21 +274,53 @@ function handleSubmit(buttonConfig) {
     return;
   }
 
-  if (CONFIG.googleForm.enabled) submitToGoogleForm(buttonConfig.value);
+  if (CONFIG.googleForm.enabled) submitToGoogleForm([{ name: CONFIG.googleForm.ratingFieldName, value: buttonConfig.value }]);
   if (CONFIG.appsScript.enabled) submitToAppsScript(buttonConfig.value);
 
   localStorage.setItem('kiosk_last_submit', String(Date.now()));
   showThanks();
 }
 
+function handleLunchPick(course, buttonConfig, btn, panel) {
+  if (lunchPicked.has(course.id)) return;
+  lunchPicked.add(course.id);
+  panel.classList.add('done');
+  btn.classList.add('chosen');
+
+  const key = 'kiosk_last_submit_' + course.id;
+  if (!isSpamLikely(key)) {
+    const value = String(Number(buttonConfig.value) + (course.valueOffset || 0));   // soup 1-3, main 4-6
+    if (CONFIG.googleForm.enabled) submitToGoogleForm([{ name: CONFIG.googleForm.ratingFieldName, value }]);
+    if (CONFIG.appsScript.enabled) submitToAppsScript(value, course.id);
+    localStorage.setItem(key, String(Date.now()));
+  }
+
+  clearTimeout(idleTimer);
+  if (lunchPicked.size >= CONFIG.lunch.courses.length) {
+    showThanks();
+  } else {
+    idleTimer = setTimeout(renderAsk, CONFIG.lunch.idleResetSeconds * 1000);
+  }
+}
+
 function showThanks() {
+  clearTimeout(idleTimer);
   askScreen.classList.add('hidden');
   thanksScreen.classList.remove('hidden');
   setTimeout(() => {
     thanksScreen.classList.add('hidden');
+    renderAsk();               // rebuilds the screen, and picks up lunch/normal mode again
     askScreen.classList.remove('hidden');
   }, 1000);
 }
+
+// Every 15 s: if the lunch period started/ended and nobody is mid-rating, switch modes.
+setInterval(() => {
+  if (!thanksScreen.classList.contains('hidden')) return;
+  if (lunchPicked.size === 0 && getMode() !== currentMode) renderAsk();
+}, 15000);
+
+renderAsk();
 </script>
 </body>
 </html>
